@@ -1,74 +1,67 @@
-import time
+import RPi.GPIO as GPIO
+from time import sleep
+import Adafruit_ADS1x15
 import requests
-import math
-import random
+from hx711 import HX711
+from w1thermsensor import W1ThermSensor
 
-TOKEN = "BBFF-5Zptd1EDpETX1AHjfN1kdhAeXC6fzQ"  # Put your TOKEN here
-DEVICE_LABEL = "mifta1"  # Put your device label here 
-VARIABLE_LABEL_1 = "humidity-sensor"  # Put your first variable label here
-VARIABLE_LABEL_2 = "infrared-sensor"  # Put your second variable label here
-VARIABLE_LABEL_3 = "proximity-sensor"  # Put your second variable label here
-VARIABLE_LABEL_4 = "sensor-ultrasonik" # put your second variable label here 
+GPIO.setmode(GPIO.BCM)
 
+hx = HX711(dout_pin=5, pd_sck_pin=6)
+hx.set_scale_ratio(10)  # Ganti scale_ratio dengan nilai kalibrasi Anda
+hx.reset()
 
-def build_payload(variable_1, variable_2, variable_3, variable_4):
-    # Creates two random values for sending data
-    value_1 = random.randint(0, 100)
-    value_2 = random.randint(0, 100)
-    value_3 = random.randint(0, 100)
-    value_4 = random.randint(0, 100)
+# Inisialisasi ADC ADS1115
+adc = Adafruit_ADS1x15.ADS1115()
 
-    
+# Konfigurasi gain (penggandaan) untuk pembacaan ampere
+GAIN = 1  # Misalnya, jika diperlukan penggandaan 4x, ganti nilai ini menjadi 4
 
-    # Creates a random gps coordinates
-    lat = random.randrange(34, 36, 1) + \
-        random.randrange(1, 1000, 1) / 1000.0
-    lng = random.randrange(-83, -87, -1) + \
-        random.randrange(1, 1000, 1) / 1000.0
-    payload = {variable_1: value_1,
-               variable_2: value_2,
-               variable_3: value_3,
-	       variable_4: value_4}
+# Token dan label perangkat Ubidots
+TOKEN = "BBFF-5Zptd1EDpETX1AHjfN1kdhAeXC6fzQ"
+DEVICE_LABEL = "mifta1"  # Ganti dengan label perangkat Anda di Ubidots
 
-    return payload
+def get_hx_data():
+    berat = hx.get_raw_data_mean()
+    return berat
 
+def get_ads_data():
+    ampere = adc.read_adc(0, gain=GAIN)  # Membaca data ampere dari pin A0 pada ADC ADS1115
+    return ampere
 
-def post_request(payload):
-    # Creates the headers for the HTTP requests
-    url = "http://industrial.api.ubidots.com"
-    url = "{}/api/v1.6/devices/{}".format(url, DEVICE_LABEL)
+def get_suhu_data():
+    sensor = W1ThermSensor()
+    suhu = sensor.get_temperature()
+    return suhu
+
+def update_ubidots(berat, suhu, ampere):
+    url = "http://industrial.api.ubidots.com/api/v1.6/devices/{}".format(DEVICE_LABEL)
     headers = {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}
 
-    # Makes the HTTP requests
-    status = 400
-    attempts = 0
-    while status >= 400 and attempts <= 2:
-        req = requests.post(url=url, headers=headers, json=payload)
-        status = req.status_code
-        attempts += 1
-        time.sleep(1)
+    payload = {
+        "sensor-berat": berat,
+        "sensor-suhu": suhu,
+        "sensor-ampere": ampere
+    }
 
-    # Processes results
-    print(req.status_code, req.json())
-    if status >= 400:
-        print("[ERROR] Could not send data after 5 attempts, please check \
-            your token credentials and internet connection")
-        return False
+    response = requests.post(url, headers=headers, json=payload)
 
-    print("[INFO] request made properly, your device is updated")
-    return True
+    if response.status_code == 200:
+        print("Data berhasil dikirim ke Ubidots")
+    else:
+        print("Gagal mengirim data ke Ubidots. Kode status:", response.status_code)
 
+try:
+    while True:
+        berat = get_hx_data()
+        suhu = get_suhu_data()
+        ampere = get_ads_data()
+        
+        # Kirim data ke Ubidots
+        update_ubidots(berat, suhu, ampere)
+        
+        sleep(1)
 
-def main():
-    payload = build_payload(
-        VARIABLE_LABEL_1, VARIABLE_LABEL_2, VARIABLE_LABEL_3, VARIABLE_LABEL_4)
-
-    print("[INFO] Attemping to send data")
-    post_request(payload)
-    print("[INFO] finished")
-
-
-if __name__ == '__main__':
-    while (True):
-        main()
-        time.sleep(1)
+except KeyboardInterrupt:
+    GPIO.cleanup()
+    print("Program terminated.")
